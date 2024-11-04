@@ -1,0 +1,39 @@
+version: '3.11'
+
+services:
+  pgdb:
+    image: postgres:latest
+    container_name: pgdb
+    restart: always
+    environment:
+      POSTGRES_DB: mobile_app
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: 123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    ports:
+      - "5433:5432"
+
+  adminer:
+    image: adminer
+    ports:
+      - "8081:8080"
+
+  django:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: django_app
+    restart: always
+    volumes:
+      - .:/app
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgres://root:123@pgdb:5432/mobile_app
+    command: python manage.py runserver 0.0.0.0:8000
+    depends_on:
+      - pgdb
+
+volumes:
+  postgres_data:
