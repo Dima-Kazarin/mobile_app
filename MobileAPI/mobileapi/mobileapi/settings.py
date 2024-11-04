@@ -68,8 +68,8 @@ DATABASES = {
         'NAME': 'mobile_app',
         'USER': 'root',
         'PASSWORD': '123',
-        'HOST': 'localhost',
-        'PORT': '5433',
+        'HOST': 'pgdb',
+        'PORT': '5432',
     }
 }
 
@@ -131,3 +131,5 @@ SPECTACULAR_SETTINGS = {
         {'SessionAuth': []},
     ],
 }
+
+SESSION_ENGINE = 'django.contrib.sessions.backends.db'

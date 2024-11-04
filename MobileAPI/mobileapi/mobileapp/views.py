@@ -1,4 +1,5 @@
 from django.contrib.auth import authenticate, login, logout
+from django.contrib.sessions.models import Session
 from drf_spectacular.utils import extend_schema
 from rest_framework import viewsets, status
 from rest_framework.generics import get_object_or_404
@@ -127,6 +128,9 @@ def login_view(request):
     user = authenticate(request, username=username, password=password)
     if user is not None:
         login(request, user)
+
+        request.session['username'] = username
+
         return Response(status=status.HTTP_200_OK)
     return Response(status=status.HTTP_400_BAD_REQUEST)
 
@@ -135,4 +139,7 @@ def login_view(request):
 @api_view(['POST'])
 def logout_view(request):
     logout(request)
+
+    Session.objects.filter(session_key=request.session.session_key).delete()
+
     return Response(status=status.HTTP_200_OK)
