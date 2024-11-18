@@ -12,7 +12,7 @@ SECRET_KEY = 'django-insecure-@gqvg(6=)_5l2acx!!e&x$ydl@%5=)-z_h7f1*jb55_owr()#j
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 # Application definition
 
@@ -25,12 +25,13 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'drf_spectacular',
+    'corsheaders',
     'mobileapp',
-
 ]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -64,12 +65,11 @@ WSGI_APPLICATION = 'mobileapi.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'mobile_app',
-        'USER': 'root',
-        'PASSWORD': '123',
-        'HOST': 'pgdb',
-        'PORT': '5432',
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'mobileee$mobile_app',
+        'USER': 'mobileee',
+        'PASSWORD': 'Kazarin228',
+        'HOST': 'mobileee.mysql.pythonanywhere-services.com',
     }
 }
 
@@ -118,12 +118,15 @@ REST_FRAMEWORK = {
     'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.SessionAuthentication',
+        'rest_framework.authentication.BasicAuthentication',
+        ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.AllowAny',
     ],
 }
-
 SPECTACULAR_SETTINGS = {
-    'TITLE': 'Your Project API',
-    'DESCRIPTION': 'Your project description',
+    'TITLE': 'Mobile API',
+    'DESCRIPTION': 'This API will help u control your home products',
     'VERSION': '1.0.0',
     'SERVE_INCLUDE_SCHEMA': False,
     'AUTHENTICATION_WHITELIST': ['rest_framework.authentication.SessionAuthentication'],
@@ -132,4 +135,20 @@ SPECTACULAR_SETTINGS = {
     ],
 }
 
+
 SESSION_ENGINE = 'django.contrib.sessions.backends.db'
+
+CORS_ORIGIN_ALLOW_ALL = True
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_HEADERS = (
+    "accept",
+    "authorization",
+    "content-type",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+)
+
+SESSION_COOKIE_SECURE = True
+SESSION_COOKIE_SAMESITE = 'None'  # Для работы с cookies при кросс-доменных запросах
+

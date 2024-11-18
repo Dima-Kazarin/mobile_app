@@ -1,6 +1,6 @@
 from drf_spectacular.utils import extend_schema, OpenApiParameter, OpenApiTypes
 
-from .serializers import UserProductSerializer, PurchaseSerializer
+from .serializers import UserProductSerializer, PurchaseSerializer, RecommendationSerializer, UnitSerializer
 
 user_product_docs = extend_schema(
     responses=UserProductSerializer,
@@ -24,4 +24,28 @@ purchase_docs = extend_schema(
             description='filter purchases by user id'
         )
     ], tags=['Purchase']
+)
+
+recommendation_docs = extend_schema(
+    responses=RecommendationSerializer,
+    parameters=[
+        OpenApiParameter(
+            name='by_user_id',
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description='filter recommendation by user id'
+        )
+    ], tags=['Recommendation']
+)
+
+unit_docs = extend_schema(
+    responses=UnitSerializer,
+    parameters=[
+        OpenApiParameter(
+            name='by_unit_id',
+            type=OpenApiTypes.INT,
+            location=OpenApiParameter.QUERY,
+            description='filter units by id'
+        )
+    ], tags=['Unit']
 )
