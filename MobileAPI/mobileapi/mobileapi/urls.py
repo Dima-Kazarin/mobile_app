@@ -9,6 +9,9 @@ router = DefaultRouter()
 router.register(r'api/product', views.ProductView, basename='product')
 router.register(r'api/userproduct', views.UserProductView, basename='userproduct')
 router.register(r'api/purchase', views.PurchaseView, basename='purchase')
+router.register(r'api/recommendation', views.RecommendationView, basename='recommendation')
+router.register(r'api/unit', views.UnitView, basename='unit')
+router.register(r'api/reminder', views.ReminderView, basename='reminder')
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -17,4 +20,5 @@ urlpatterns = [
     path('api/register/', views.register_view, name='register'),
     path('api/login/', views.login_view, name='login'),
     path('api/logout/', views.logout_view, name='logout'),
+    path('api/voice_input/', views.VoiceInputView.as_view(), name='voice_input'),
 ] + router.urls

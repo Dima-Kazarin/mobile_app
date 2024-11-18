@@ -1,15 +1,49 @@
+from deep_translator import GoogleTranslator
+
 from django.contrib.auth import authenticate, login, logout
-from django.contrib.sessions.models import Session
+from .models import User
+from django.views.decorators.csrf import csrf_exempt
 from drf_spectacular.utils import extend_schema
 from rest_framework import viewsets, status
 from rest_framework.generics import get_object_or_404
+from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.response import Response
 from rest_framework.decorators import api_view
+from rest_framework.views import APIView
+from word2number import w2n
+import speech_recognition as sr
+from django.db.models import F
+from itertools import combinations
+from datetime import timedelta
+from django.utils.timezone import now, is_aware, make_aware
 
-from .models import Product, Purchase, Recommendation, UserProduct
+from .models import Product, Purchase, Recommendation, UserProduct, Unit, Reminder, PurchaseCounter
 from .serializers import (ProductSerializer, UserProductSerializer, PurchaseSerializer, RecommendationSerializer,
-                          RegisterSerializer)
-from .schemas import user_product_docs, purchase_docs
+                          RegisterSerializer, UnitSerializer, LoginSerializer, ReminderSerializer, PurchaseCounterSerializer)
+from .schemas import user_product_docs, purchase_docs, unit_docs
+
+
+class UnitView(viewsets.ViewSet):
+    @unit_docs
+    def list(self, request):
+        query_set = Unit.objects.all()
+
+        by_unit_id = request.query_params.get('by_unit_id')
+
+        if by_unit_id:
+            query_set = query_set.filter(id=by_unit_id)
+
+        serializer = UnitSerializer(query_set, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(request=UnitSerializer, tags=['Unit'])
+    def create(self, request):
+        serializer = UnitSerializer(data=request.data)
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(status=status.HTTP_200_OK)
+        return Response(status=status.HTTP_400_BAD_REQUEST)
 
 
 class ProductView(viewsets.ViewSet):
@@ -44,13 +78,64 @@ class PurchaseView(viewsets.ViewSet):
     @extend_schema(request=PurchaseSerializer, tags=['Purchase'])
     def create(self, request):
         serializer = PurchaseSerializer(data=request.data)
-        serializer_user_product = UserProductSerializer(data=request.data)
+        serializer1 = UserProductSerializer(data=request.data)
 
-        if serializer.is_valid() and serializer_user_product.is_valid():
-            serializer.save()
-            serializer_user_product.save()
+        if serializer.is_valid() and serializer1.is_valid():
+            self.process_purchase(request.user)
+
+            purchase = serializer.save()
+
+            user_product = serializer1.save()
+
             return Response(status=status.HTTP_200_OK)
         return Response(status=status.HTTP_400_BAD_REQUEST)
+
+    def process_purchase(self, user):
+        current_time = now()
+
+        recent_purchases = Purchase.objects.filter(user=user, purchase_date__gte=current_time - timedelta(minutes=30))
+
+        last_purchase = Purchase.objects.filter(user=user).order_by('-purchase_date').first()
+
+        if last_purchase:
+            last_purchase_date = last_purchase.purchase_date
+            if not is_aware(last_purchase_date):
+                last_purchase_date = make_aware(last_purchase_date)
+
+            if (current_time - last_purchase_date).total_seconds() > 30 * 60:
+                purchase_counter, created = PurchaseCounter.objects.get_or_create(id=1, defaults={'total_purchases': 0})
+                purchase_counter.total_purchases += 1
+                purchase_counter.save()
+
+        recent_product_ids = [purchase.product.id for purchase in recent_purchases]
+
+        pairs = self.group_product_pairs(recent_product_ids)
+
+        for id_product1, id_product2 in pairs:
+            if id_product1 == id_product2:
+                continue
+
+            recommendation, created = Recommendation.objects.get_or_create(
+                product1=Product.objects.get(id=id_product1),
+                product2=Product.objects.get(id=id_product2),
+            )
+
+            if created:
+                recommendation.quantity = 1
+            else:
+                recommendation.quantity = F('quantity') + 1
+
+            recommendation.save()
+
+        purchase_counter = PurchaseCounter.objects.get(id=1)
+        recommendations = Recommendation.objects.all()
+
+        for rec in recommendations:
+            rec.probability = rec.quantity / purchase_counter.total_purchases
+            rec.save()
+
+    def group_product_pairs(self, product_ids):
+        return list(combinations(product_ids, 2))
 
 
 class UserProductView(viewsets.ViewSet):
@@ -65,9 +150,11 @@ class UserProductView(viewsets.ViewSet):
         serializer = UserProductSerializer(query_set, many=True)
         return Response(serializer.data)
 
+
     @extend_schema(request=UserProductSerializer, tags=['UserProduct'])
-    def create(self, request):
-        serializer = UserProductSerializer(data=request.data)
+    def update(self, request, pk=None):
+        obj = get_object_or_404(UserProduct, pk=pk)
+        serializer = UserProductSerializer(obj, data=request.data)
 
         if serializer.is_valid():
             serializer.save()
@@ -108,38 +195,117 @@ def register_view(request):
     return Response(status=status.HTTP_400_BAD_REQUEST)
 
 
-@extend_schema(
-    request={
-        'application/json': {
-            'type': 'object',
-            'properties': {
-                'username': {'type': 'string'},
-                'password': {'type': 'string'},
-            },
-            'required': ['username', 'password'],
-        }
-    },
-    tags=['Auth']
-)
+@extend_schema(request=LoginSerializer, tags=['Auth'])
 @api_view(['POST'])
 def login_view(request):
-    username = request.data.get('username')
-    password = request.data.get('password')
-    user = authenticate(request, username=username, password=password)
-    if user is not None:
-        login(request, user)
+    serializer = LoginSerializer(data=request.data)
 
-        request.session['username'] = username
+    if serializer.is_valid():
+        username = serializer.validated_data.get('username')
+        password = serializer.validated_data.get('password')
 
-        return Response(status=status.HTTP_200_OK)
-    return Response(status=status.HTTP_400_BAD_REQUEST)
+        user = authenticate(request, username=username, password=password)
+
+        if user is not None:
+            login(request, user)
+            response = Response({'success': 'Login success'}, status=status.HTTP_200_OK)
+            response.set_cookie('user_id', request.user.id)
+            return response
+
+        return Response({"detail": "Invalid credentials"}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 @extend_schema(request=None, tags=['Auth'])
 @api_view(['POST'])
 def logout_view(request):
     logout(request)
+    response = Response(status=status.HTTP_200_OK)
+    response.delete_cookie('user_id')
+    return response
 
-    Session.objects.filter(session_key=request.session.session_key).delete()
 
-    return Response(status=status.HTTP_200_OK)
+class VoiceInputView(APIView):
+    parser_classes = [MultiPartParser, FormParser]
+
+    @csrf_exempt
+    def post(self, request, *args, **kwargs):
+        audio_file = request.FILES['audio']
+
+        recognizer = sr.Recognizer()
+        if not request.user.is_authenticated:
+            return Response(status=status.HTTP_401_UNAUTHORIZED)
+
+        with sr.AudioFile(audio_file) as source:
+            audio = recognizer.listen(source)
+
+        try:
+            text = recognizer.recognize_google(audio, language="uk")
+            translated = GoogleTranslator(source='uk', target='en').translate(text)
+
+            response = self.process_purchase_request(translated, request.user)
+
+            return Response(response, status=status.HTTP_200_OK)
+
+        except sr.UnknownValueError:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+        except sr.RequestError:
+            return Response(status=status.HTTP_400_BAD_REQUEST)
+
+    def process_purchase_request(self, text, user):
+        products_queryset = Product.objects.all()
+        products = {product.name: product.id for product in products_queryset}
+
+        names_product = list(products.keys())
+
+        data = []
+        words = text.split()
+
+        for word in words:
+            try:
+                number = w2n.word_to_num(word)
+                data.append(number)
+            except ValueError:
+                if word in names_product:
+                    data.append(word)
+
+        if len(data) > 1:
+            value_to_find = data[1]
+            found_key = next((key for key, value in products.items() if key == value_to_find), None)
+
+            if found_key:
+                product = Product.objects.get(name=found_key)
+                purchase = Purchase.objects.create(
+                    user=User.objects.get(id=user.id),
+                    product=product,
+                    quantity=data[0]
+                )
+                userproduct = UserProduct.objects.create(
+                    user=User.objects.get(id=user.id),
+                    product=product,
+                    quantity=data[0]
+                )
+                return {"status": "success", "message": "Purchase created successfully."}
+            else:
+                return {"status": "error", "message": "Product not found."}
+        else:
+            return {"status": "error", "message": "Insufficient data to process purchase."}
+
+
+class ReminderView(viewsets.ViewSet):
+    @extend_schema(responses=ReminderSerializer, tags=['Reminder'])
+    def list(self, request):
+        query_set = Reminder.objects.all()
+
+        serializer = ReminderSerializer(query_set, many=True)
+        return Response(serializer.data)
+
+    @extend_schema(request=ReminderSerializer, tags=['Reminder'])
+    def create(self, request):
+        serializer = ReminderSerializer(data=request.data)
+
+        if serializer.is_valid():
+            serializer.save()
+            return Response(status=status.HTTP_200_OK)
+        return Response(status=status.HTTP_400_BAD_REQUEST)
