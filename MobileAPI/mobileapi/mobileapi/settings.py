@@ -27,6 +27,7 @@ INSTALLED_APPS = [
     'drf_spectacular',
     'corsheaders',
     'mobileapp',
+    'background_task',
 ]
 
 MIDDLEWARE = [

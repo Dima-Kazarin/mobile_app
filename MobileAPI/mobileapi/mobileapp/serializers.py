@@ -66,7 +66,6 @@ class PurchaseCounterSerializer(serializers.ModelSerializer):
         model = PurchaseCounter
         fields = '__all__'
 
-
 class ReminderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Reminder

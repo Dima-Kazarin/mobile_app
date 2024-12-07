@@ -20,7 +20,16 @@ from django.utils.timezone import now, is_aware, make_aware
 from .models import Product, Purchase, Recommendation, UserProduct, Unit, Reminder, PurchaseCounter
 from .serializers import (ProductSerializer, UserProductSerializer, PurchaseSerializer, RecommendationSerializer,
                           RegisterSerializer, UnitSerializer, LoginSerializer, ReminderSerializer, PurchaseCounterSerializer)
-from .schemas import user_product_docs, purchase_docs, unit_docs
+from .schemas import user_product_docs, purchase_docs, unit_docs, reminder_docs
+from .tasks import daily_reminder_task
+
+
+class PurchaseCounterView(viewsets.ViewSet):
+    @extend_schema(responses=PurchaseCounterSerializer, tags=['Purchase'])
+    def list(self, request):
+        query_set = PurchaseCounter.objects.all()
+        serializer = PurchaseCounterSerializer(query_set, many=True)
+        return Response(serializer.data)
 
 
 class UnitView(viewsets.ViewSet):
@@ -87,7 +96,7 @@ class PurchaseView(viewsets.ViewSet):
 
             user_product = serializer1.save()
 
-            return Response(status=status.HTTP_200_OK)
+            return Response({"status": "success", "message": "Purchase created successfully."}, status=status.HTTP_200_OK)
         return Response(status=status.HTTP_400_BAD_REQUEST)
 
     def process_purchase(self, user):
@@ -135,7 +144,7 @@ class PurchaseView(viewsets.ViewSet):
             rec.save()
 
     def group_product_pairs(self, product_ids):
-        return list(combinations(product_ids, 2))
+        return [(min(a, b), max(a, b)) for a, b in combinations(product_ids, 2)]
 
 
 class UserProductView(viewsets.ViewSet):
@@ -275,6 +284,8 @@ class VoiceInputView(APIView):
             found_key = next((key for key, value in products.items() if key == value_to_find), None)
 
             if found_key:
+                self.process_p(user)
+
                 product = Product.objects.get(name=found_key)
                 purchase = Purchase.objects.create(
                     user=User.objects.get(id=user.id),
@@ -289,14 +300,113 @@ class VoiceInputView(APIView):
                 return {"status": "success", "message": "Purchase created successfully."}
             else:
                 return {"status": "error", "message": "Product not found."}
+
+        if 'my' in words and 'products' in words:
+            my_index = words.index("my")
+            products_index = words.index("products")
+            if abs(my_index - products_index) == 1:
+                return self.get_user_product_list(user.id)
+
+        if "my" in words and "reminders" in words:
+            my_index = words.index("my")
+            reminders_index = words.index("reminders")
+            if abs(my_index - reminders_index) == 1:
+                return self.get_user_reminders(user.id)
+
+
+    def get_user_reminders(self, user_id):
+        reminders = Reminder.objects.filter(user_id=user_id).select_related('product', 'product__unit')
+
+        if reminders.exists():
+            user_reminder_list = [
+                {
+                "id": reminder.id,
+                "name": reminder.product.name,
+                "unit": reminder.product.unit.name,
+                "created_at": reminder.created_at,
+                }
+                for reminder in reminders
+            ]
         else:
-            return {"status": "error", "message": "Insufficient data to process purchase."}
+            return {"status": "info", "message": f"User {user_id} has no reminders."}
+
+        return {'reminders': user_reminder_list}
+
+
+    def get_user_product_list(self, user_id):
+        user_products = UserProduct.objects.filter(user_id=user_id).select_related('product')
+
+        if not user_products.exists():
+            return {"status": "info", "message": f"User {user_id} has no products."}
+
+        user_product_list = [
+            {
+                "id": user_product.id,
+                "name": user_product.product.name,
+                "unit": user_product.product.unit.name,
+                "quantity": user_product.quantity
+            }
+            for user_product in user_products
+        ]
+
+        return {"products": user_product_list}
+
+    def process_p(self, user):
+        current_time = now()
+
+        recent_purchases = Purchase.objects.filter(user=user, purchase_date__gte=current_time - timedelta(minutes=30))
+
+        last_purchase = Purchase.objects.filter(user=user).order_by('-purchase_date').first()
+
+        if last_purchase:
+            last_purchase_date = last_purchase.purchase_date
+            if not is_aware(last_purchase_date):
+                last_purchase_date = make_aware(last_purchase_date)
+
+            if (current_time - last_purchase_date).total_seconds() > 30 * 60:
+                purchase_counter, created = PurchaseCounter.objects.get_or_create(id=1, defaults={'total_purchases': 0})
+                purchase_counter.total_purchases += 1
+                purchase_counter.save()
+
+        recent_product_ids = [purchase.product.id for purchase in recent_purchases]
+
+        pairs = self.group_product_pairs(recent_product_ids)
+
+        for id_product1, id_product2 in pairs:
+            if id_product1 == id_product2:
+                continue
+
+            recommendation, created = Recommendation.objects.get_or_create(
+                product1=Product.objects.get(id=id_product1),
+                product2=Product.objects.get(id=id_product2),
+            )
+
+            if created:
+                recommendation.quantity = 1
+            else:
+                recommendation.quantity = F('quantity') + 1
+
+            recommendation.save()
+
+        purchase_counter = PurchaseCounter.objects.get(id=1)
+        recommendations = Recommendation.objects.all()
+
+        for rec in recommendations:
+            rec.probability = rec.quantity / purchase_counter.total_purchases
+            rec.save()
+
+    def group_product_pairs(self, product_ids):
+        return [(min(a, b), max(a, b)) for a, b in combinations(product_ids, 2)]
 
 
 class ReminderView(viewsets.ViewSet):
-    @extend_schema(responses=ReminderSerializer, tags=['Reminder'])
+    @reminder_docs
     def list(self, request):
         query_set = Reminder.objects.all()
+        by_user_id = request.query_params.get('by_user_id')
+
+        if by_user_id:
+            query_set = query_set.filter(user=by_user_id)
 
         serializer = ReminderSerializer(query_set, many=True)
         return Response(serializer.data)
@@ -309,3 +419,6 @@ class ReminderView(viewsets.ViewSet):
             serializer.save()
             return Response(status=status.HTTP_200_OK)
         return Response(status=status.HTTP_400_BAD_REQUEST)
+
+
+daily_reminder_task(repeat=86400)
