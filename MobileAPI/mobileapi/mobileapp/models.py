@@ -5,7 +5,6 @@ from django.db import models
 class User(AbstractUser):
     pass
 
-
 class Unit(models.Model):
     name = models.CharField(max_length=255, unique=True)
 
